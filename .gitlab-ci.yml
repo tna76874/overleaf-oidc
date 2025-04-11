@@ -7,10 +7,12 @@ stages:
   tags:
     - docker
   variables:
-    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
   services:
     - name: docker:dind
       alias: docker
+      command: ["--tls=false"]
   image: docker
   before_script:
     - apk add git
