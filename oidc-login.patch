@@ -1,0 +1,645 @@
+From a2852cd2db8a786900920bbe742f88fb08349933 Mon Sep 17 00:00:00 2001
+From: Erik Michelson <opensource@erik.michelson.eu>
+Date: Fri, 11 Apr 2025 22:38:12 +0200
+Subject: [PATCH] [auth] Add OIDC login
+
+---
+ package-lock.json                             |  20 ++
+ .../AuthenticationController.js               | 185 ++++++++++++++----
+ .../User/UserPrimaryEmailCheckHandler.js      |   5 +
+ .../app/src/infrastructure/ExpressLocals.js   |  12 ++
+ .../web/app/src/infrastructure/Server.mjs     |  20 ++
+ services/web/app/src/models/User.js           |   1 +
+ services/web/app/src/router.mjs               |  15 +-
+ .../layout/navbar-marketing-bootstrap-5.pug   |  29 ++-
+ .../web/app/views/layout/navbar-marketing.pug |  29 ++-
+ .../views/layout/navbar-website-redesign.pug  |  29 ++-
+ services/web/app/views/user/login.pug         |  80 ++++----
+ services/web/config/settings.defaults.js      |   5 +
+ services/web/package.json                     |   1 +
+ 13 files changed, 329 insertions(+), 102 deletions(-)
+
+diff --git a/package-lock.json b/package-lock.json
+index b0fb9ef..3190a4c 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -6128,6 +6128,25 @@
+       "resolved": "https://registry.npmjs.org/yallist/-/yallist-4.0.0.tgz",
+       "integrity": "sha512-3wdGidZyq5PB084XLES5TpOSRA3wjXAlIWMhum2kRcv/41Sn2emQ0dycQW4uZXLejwKvg6EsvbdlVL+FYEct7A=="
+     },
++    "node_modules/@govtechsg/passport-openidconnect": {
++      "version": "1.0.3",
++      "resolved": "https://registry.npmjs.org/@govtechsg/passport-openidconnect/-/passport-openidconnect-1.0.3.tgz",
++      "integrity": "sha512-Xf7B4gxg6HV+rRwBxqk+icexS1BT9Yd9ERnkw+PQVvId02OoEqqFo55kn9sine2mMCuh/OYQU95jlT/9CU1AtQ==",
++      "license": "MIT",
++      "dependencies": {
++        "oauth": "^0.10.0",
++        "passport-strategy": "^1.0.0"
++      },
++      "engines": {
++        "node": ">= 0.6.0"
++      }
++    },
++    "node_modules/@govtechsg/passport-openidconnect/node_modules/oauth": {
++      "version": "0.10.2",
++      "resolved": "https://registry.npmjs.org/oauth/-/oauth-0.10.2.tgz",
++      "integrity": "sha512-JtFnB+8nxDEXgNyniwz573xxbKSOu3R8D40xQKqcjwJ2CDkYqUDI53o6IuzDJBx60Z8VKCm271+t8iFjakrl8Q==",
++      "license": "MIT"
++    },
+     "node_modules/@grpc/grpc-js": {
+       "version": "1.8.22",
+       "resolved": "https://registry.npmjs.org/@grpc/grpc-js/-/grpc-js-1.8.22.tgz",
+@@ -44317,6 +44336,7 @@
+         "@contentful/rich-text-html-renderer": "^16.0.2",
+         "@contentful/rich-text-types": "^16.0.2",
+         "@google-cloud/bigquery": "^6.0.1",
++        "@govtechsg/passport-openidconnect": "^1.0.3",
+         "@node-oauth/oauth2-server": "^5.1.0",
+         "@node-saml/passport-saml": "^4.0.4",
+         "@overleaf/access-token-encryptor": "*",
+diff --git a/services/web/app/src/Features/Authentication/AuthenticationController.js b/services/web/app/src/Features/Authentication/AuthenticationController.js
+index 7a97d2a..5f662c7 100644
+--- a/services/web/app/src/Features/Authentication/AuthenticationController.js
++++ b/services/web/app/src/Features/Authentication/AuthenticationController.js
+@@ -9,6 +9,8 @@ const querystring = require('querystring')
+ const Settings = require('@overleaf/settings')
+ const basicAuth = require('basic-auth')
+ const tsscmp = require('tsscmp')
++const { User } = require('../../models/User')
++const UserCreator = require('../User/UserCreator')
+ const UserHandler = require('../User/UserHandler')
+ const UserSessionsManager = require('../User/UserSessionsManager')
+ const Analytics = require('../Analytics/AnalyticsManager')
+@@ -97,50 +99,62 @@ const AuthenticationController = {
+     cb(null, user)
+   },
+ 
++  createPassportCallback(method) {
++    return async function (err, user, info) {
++      if (err) {
++        return next(err)
++      }
++      if (user) {
++        // `user` is either a user object or false
++        AuthenticationController.setAuditInfo(req, {
++          method,
++        })
++
++        try {
++          // We could investigate whether this can be done together with 'preFinishLogin' instead of being its own hook
++          await Modules.promises.hooks.fire(
++            'saasLogin',
++            { email: user.email },
++            req
++          )
++          await AuthenticationController.promises.finishLogin(user, req, res)
++        } catch (err) {
++          return next(err)
++        }
++      } else {
++        if (info.redir != null) {
++          return res.json({ redir: info.redir })
++        } else {
++          res.status(info.status || 200)
++          delete info.status
++          const body = { message: info }
++          const { errorReason } = info
++          if (errorReason) {
++            body.errorReason = errorReason
++            delete info.errorReason
++          }
++          return res.json(body)
++        }
++      }
++    }
++  },
++
+   passportLogin(req, res, next) {
+     // This function is middleware which wraps the passport.authenticate middleware,
+     // so we can send back our custom `{message: {text: "", type: ""}}` responses on failure,
+     // and send a `{redir: ""}` response on success
++    if (process.env.OVERLEAF_ENABLE_LOCAL_LOGIN === 'false') {
++      return res.status(403).json({
++        message: {
++          type: 'error',
++          text: 'Local login is disabled',
++        },
++      })
++    }
+     passport.authenticate(
+       'local',
+       { keepSessionInfo: true },
+-      async function (err, user, info) {
+-        if (err) {
+-          return next(err)
+-        }
+-        if (user) {
+-          // `user` is either a user object or false
+-          AuthenticationController.setAuditInfo(req, {
+-            method: 'Password login',
+-          })
+-
+-          try {
+-            // We could investigate whether this can be done together with 'preFinishLogin' instead of being its own hook
+-            await Modules.promises.hooks.fire(
+-              'saasLogin',
+-              { email: user.email },
+-              req
+-            )
+-            await AuthenticationController.promises.finishLogin(user, req, res)
+-          } catch (err) {
+-            return next(err)
+-          }
+-        } else {
+-          if (info.redir != null) {
+-            return res.json({ redir: info.redir })
+-          } else {
+-            res.status(info.status || 200)
+-            delete info.status
+-            const body = { message: info }
+-            const { errorReason } = info
+-            if (errorReason) {
+-              body.errorReason = errorReason
+-              delete info.errorReason
+-            }
+-            return res.json(body)
+-          }
+-        }
+-      }
++      AuthenticationController.createPassportCallback('Password login')
+     )(req, res, next)
+   },
+ 
+@@ -601,6 +615,103 @@ const AuthenticationController = {
+       delete req.session.postLoginRedirect
+     }
+   },
++
++  extractOidcIdFromProfile(profile) {
++    const method = process.env.OVERLEAF_OIDC_MATCHING || 'id'
++    switch (method) {
++      case 'username':
++        return profile.username
++      case 'id':
++      default:
++        return profile.id
++    }
++  },
++
++  ensureOidcLoginEnabled(res) {
++    if (process.env.OVERLEAF_OIDC_ISSUER === undefined) {
++      res.status(403).json({
++        message: {
++          type: 'error',
++          text: 'OIDC login is disabled',
++        },
++      })
++      return false
++    }
++    return true
++  },
++
++  oidcLogin(req, res, next) {
++    if (!AuthenticationController.ensureOidcLoginEnabled(res)) {
++      return
++    }
++    return passport.authenticate('oidc')(req, res, next)
++  },
++
++  oidcLoginCallback(req, res, next) {
++    if (!AuthenticationController.ensureOidcLoginEnabled(res)) {
++      return
++    }
++    return passport.authenticate(
++      'oidc',
++      {
++        failureRedirect: '/login',
++        failureMessage: true,
++      },
++      AuthenticationController.createPassportCallback('OIDC login')
++    )(req, res, next)
++  },
++
++  verifyOpenIDConnect(issuer, profile, callback) {
++    User.findOne(
++      {
++        oidcIdentifier:
++          AuthenticationController.extractOidcIdFromProfile(profile),
++      },
++      function (error, user) {
++        if (error) {
++          return callback(error)
++        }
++        if (!user) {
++          UserCreator.createNewUser(
++            {
++              holdingAccount: false,
++              email: profile.emails[0].value,
++              first_name: profile.name?.givenName || '',
++              last_name: profile.name?.familyName || profile.username,
++              oidcIdentifier:
++                AuthenticationController.extractOidcIdFromProfile(profile),
++            },
++            function (user) {
++              return callback(null, user)
++            }
++          )
++        } else {
++          user.first_name = profile.name?.givenName || ''
++          user.last_name = profile.name?.familyName || profile.username
++          if (user.email !== profile.emails[0].value) {
++            user.email = profile.emails[0].value
++            const reversedHostname = user.email
++              .split('@')[1]
++              .split('')
++              .reverse()
++              .join('')
++            const emailData = {
++              email: user.email,
++              createdAt: new Date(),
++              reversedHostname,
++            }
++            user.emails = [emailData]
++          }
++          user.save(function (error) {
++            if (error) {
++              return callback(error)
++            }
++            return callback(null, user)
++          })
++        }
++      }
++    )
++  },
+ }
+ 
+ function _afterLoginSessionSetup(req, user, callback) {
+diff --git a/services/web/app/src/Features/User/UserPrimaryEmailCheckHandler.js b/services/web/app/src/Features/User/UserPrimaryEmailCheckHandler.js
+index be1d045..eb41c10 100644
+--- a/services/web/app/src/Features/User/UserPrimaryEmailCheckHandler.js
++++ b/services/web/app/src/Features/User/UserPrimaryEmailCheckHandler.js
+@@ -6,6 +6,11 @@ function requiresPrimaryEmailCheck({
+   lastPrimaryEmailCheck,
+   signUpDate,
+ }) {
++  // we never require a check when using OIDC, as emails are retrieved from the OIDC provider
++  if (process.env.OVERLEAF_OIDC_ISSUER !== undefined) {
++    return false
++  }
++
+   const hasExpired = date => {
+     if (!date) {
+       return true
+diff --git a/services/web/app/src/infrastructure/ExpressLocals.js b/services/web/app/src/infrastructure/ExpressLocals.js
+index eae1b48..7c22494 100644
+--- a/services/web/app/src/infrastructure/ExpressLocals.js
++++ b/services/web/app/src/infrastructure/ExpressLocals.js
+@@ -227,6 +227,18 @@ module.exports = function (webRouter, privateApiRouter, publicApiRouter) {
+       return staticFilesBase + path
+     }
+ 
++    res.locals.local_login_enabled =
++      (process.env.OVERLEAF_ENABLE_LOCAL_LOGIN || 'true') === 'true'
++    res.locals.oidc_login_enabled =
++      process.env.OVERLEAF_OIDC_ISSUER !== undefined
++    res.locals.login_info_text =
++      process.env.OVERLEAF_LOGIN_INFO_TEXT ||
++      'Welcome to Overleaf! Log in to your account below.'
++    res.locals.oidc_login_button_text =
++      process.env.OVERLEAF_LOGIN_OIDC_BUTTON || 'Log in with SSO'
++    res.locals.oidc_login_in_navbar =
++      process.env.OVERLEAF_OIDC_LOGIN_IN_NAVBAR === 'true'
++
+     next()
+   })
+ 
+diff --git a/services/web/app/src/infrastructure/Server.mjs b/services/web/app/src/infrastructure/Server.mjs
+index 3c7fd75..acb85c0 100644
+--- a/services/web/app/src/infrastructure/Server.mjs
++++ b/services/web/app/src/infrastructure/Server.mjs
+@@ -20,6 +20,7 @@ import cookieParser from 'cookie-parser'
+ import bearerTokenMiddleware from 'express-bearer-token'
+ import passport from 'passport'
+ import { Strategy as LocalStrategy } from 'passport-local'
++import { Strategy as OpenIDConnectStrategy } from '@govtechsg/passport-openidconnect'
+ import ReferalConnect from '../Features/Referal/ReferalConnect.mjs'
+ import RedirectManager from './RedirectManager.js'
+ import translations from './Translations.js'
+@@ -211,6 +212,7 @@ webRouter.use(passport.initialize())
+ webRouter.use(passport.session())
+ 
+ passport.use(
++  'local',
+   new LocalStrategy(
+     {
+       passReqToCallback: true,
+@@ -220,6 +222,24 @@ passport.use(
+     AuthenticationController.doPassportLogin
+   )
+ )
++
++passport.use(
++  'oidc',
++  new OpenIDConnectStrategy(
++    {
++      issuer: process.env.OVERLEAF_OIDC_ISSUER,
++      authorizationURL: process.env.OVERLEAF_OIDC_AUTHORIZATION_URL,
++      tokenURL: process.env.OVERLEAF_OIDC_TOKEN_URL,
++      userInfoURL: process.env.OVERLEAF_OIDC_USERINFO_URL,
++      clientID: process.env.OVERLEAF_OIDC_CLIENT_ID,
++      clientSecret: process.env.OVERLEAF_OIDC_CLIENT_SECRET,
++      callbackURL: process.env.OVERLEAF_OIDC_CALLBACK_URL,
++      scope: process.env.OVERLEAF_OIDC_SCOPE || 'openid profile email',
++    },
++    AuthenticationController.verifyOpenIDConnect
++  )
++)
++
+ passport.serializeUser(AuthenticationController.serializeUser)
+ passport.deserializeUser(AuthenticationController.deserializeUser)
+ 
+diff --git a/services/web/app/src/models/User.js b/services/web/app/src/models/User.js
+index 73506f1..d9811b4 100644
+--- a/services/web/app/src/models/User.js
++++ b/services/web/app/src/models/User.js
+@@ -211,6 +211,7 @@ const UserSchema = new Schema(
+     awareOfV2: { type: Boolean, default: false },
+     samlIdentifiers: { type: Array, default: [] },
+     thirdPartyIdentifiers: { type: Array, default: [] },
++    oidcIdentifier: { type: String },
+     migratedAt: { type: Date },
+     twoFactorAuthentication: {
+       createdAt: { type: Date },
+diff --git a/services/web/app/src/router.mjs b/services/web/app/src/router.mjs
+index 1c024fe..d13bc45 100644
+--- a/services/web/app/src/router.mjs
++++ b/services/web/app/src/router.mjs
+@@ -220,6 +220,15 @@ async function initialize(webRouter, privateApiRouter, publicApiRouter) {
+   webRouter.get('/login', UserPagesController.loginPage)
+   AuthenticationController.addEndpointToLoginWhitelist('/login')
+ 
++  webRouter.get('/login/oidc', AuthenticationController.oidcLogin)
++  AuthenticationController.addEndpointToLoginWhitelist('/login/oidc')
++
++  webRouter.get(
++    '/login/oidc/callback',
++    AuthenticationController.oidcLoginCallback
++  )
++  AuthenticationController.addEndpointToLoginWhitelist('/login/oidc/callback')
++
+   webRouter.post(
+     '/login',
+     RateLimiterMiddleware.rateLimit(overleafLoginRateLimiter), // rate limit IP (20 / 60s)
+@@ -268,8 +277,12 @@ async function initialize(webRouter, privateApiRouter, publicApiRouter) {
+ 
+   if (Features.hasFeature('registration-page')) {
+     webRouter.get('/register', UserPagesController.registerPage)
+-    AuthenticationController.addEndpointToLoginWhitelist('/register')
++  } else {
++    webRouter.get('/register', function (req, res, next) {
++      res.redirect('/login')
++    })
+   }
++  AuthenticationController.addEndpointToLoginWhitelist('/register')
+ 
+   EditorRouter.apply(webRouter, privateApiRouter)
+   CollaboratorsRouter.apply(webRouter, privateApiRouter)
+diff --git a/services/web/app/views/layout/navbar-marketing-bootstrap-5.pug b/services/web/app/views/layout/navbar-marketing-bootstrap-5.pug
+index 1c527c9..c45efa9 100644
+--- a/services/web/app/views/layout/navbar-marketing-bootstrap-5.pug
++++ b/services/web/app/views/layout/navbar-marketing-bootstrap-5.pug
+@@ -144,15 +144,26 @@ nav.navbar.navbar-default.navbar-main.navbar-expand-lg(class={
+ 								) #{translate('sign_up')}
+ 
+ 						// login link
+-						+nav-item
+-							+nav-link(
+-								href="/login"
+-								event-tracking="menu-click"
+-								event-tracking-action="clicked"
+-								event-tracking-trigger="click"
+-								event-tracking-mb="true"
+-								event-segmentation={ page: currentUrl, item: 'login', location: 'top-menu' }
+-							) #{translate('log_in')}
++						if local_login_enabled
++							+nav-item
++								+nav-link(
++									href="/login"
++									event-tracking="menu-click"
++									event-tracking-action="clicked"
++									event-tracking-trigger="click"
++									event-tracking-mb="true"
++									event-segmentation={ page: currentUrl, item: 'login', location: 'top-menu' }
++								) #{translate('log_in')}
++						if oidc_login_enabled && (oidc_login_in_navbar || !local_login_enabled)
++							+nav-item
++								+nav-link(
++									href="/login/oidc"
++									event-tracking="menu-click"
++									event-tracking-action="clicked"
++									event-tracking-trigger="click"
++									event-tracking-mb="true"
++									event-segmentation={ page: currentUrl, item: 'login', location: 'top-menu' }
++								) #{oidc_login_button_text}
+ 
+ 					// projects link and account menu
+ 					if getSessionUser()
+diff --git a/services/web/app/views/layout/navbar-marketing.pug b/services/web/app/views/layout/navbar-marketing.pug
+index ebf698f..a76a651 100644
+--- a/services/web/app/views/layout/navbar-marketing.pug
++++ b/services/web/app/views/layout/navbar-marketing.pug
+@@ -147,15 +147,26 @@ nav.navbar.navbar-default.navbar-main
+ 								) #{translate('sign_up')}
+ 
+ 						// login link
+-						li
+-							a(
+-								href="/login"
+-								event-tracking="menu-click"
+-								event-tracking-action="clicked"
+-								event-tracking-trigger="click"
+-								event-tracking-mb="true"
+-								event-segmentation={ page: currentUrl, item: 'login', location: 'top-menu' }
+-							) #{translate('log_in')}
++						if local_login_enabled
++							li
++								a(
++									href="/login"
++									event-tracking="menu-click"
++									event-tracking-action="clicked"
++									event-tracking-trigger="click"
++									event-tracking-mb="true"
++									event-segmentation={ page: currentUrl, item: 'login', location: 'top-menu' }
++								) #{translate('log_in')}
++						if oidc_login_enabled && (oidc_login_in_navbar || !local_login_enabled)
++							li
++								a(
++									href="/login/oidc"
++									event-tracking="menu-click"
++									event-tracking-action="clicked"
++									event-tracking-trigger="click"
++									event-tracking-mb="true"
++									event-segmentation={ page: currentUrl, item: 'login', location: 'top-menu' }
++								) #{oidc_login_button_text}
+ 
+ 					// projects link and account menu
+ 					if getSessionUser()
+diff --git a/services/web/app/views/layout/navbar-website-redesign.pug b/services/web/app/views/layout/navbar-website-redesign.pug
+index 3e18ca9..3c8af6e 100644
+--- a/services/web/app/views/layout/navbar-website-redesign.pug
++++ b/services/web/app/views/layout/navbar-website-redesign.pug
+@@ -147,15 +147,26 @@ nav.navbar.navbar-default.navbar-main.website-redesign-navbar
+ 								) #{translate('sign_up')}
+ 
+ 						// login link
+-						li.secondary
+-							a(
+-								href="/login"
+-								event-tracking="menu-click"
+-								event-tracking-action="clicked"
+-								event-tracking-trigger="click"
+-								event-tracking-mb="true"
+-								event-segmentation={ page: currentUrl, item: 'login', location: 'top-menu' }
+-							) #{translate('log_in')}
++						if local_login_enabled
++							li.secondary
++								a(
++									href="/login"
++									event-tracking="menu-click"
++									event-tracking-action="clicked"
++									event-tracking-trigger="click"
++									event-tracking-mb="true"
++									event-segmentation={ page: currentUrl, item: 'login', location: 'top-menu' }
++								) #{translate('log_in')}
++						if oidc_login_enabled && (oidc_login_in_navbar || !local_login_enabled)
++							li.secondary
++								a(
++									href="/login/oidc"
++									event-tracking="menu-click"
++									event-tracking-action="clicked"
++									event-tracking-trigger="click"
++									event-tracking-mb="true"
++									event-segmentation={ page: currentUrl, item: 'login', location: 'top-menu' }
++								) #{oidc_login_button_text}
+ 
+ 					// projects link and account menu
+ 					if getSessionUser()
+diff --git a/services/web/app/views/user/login.pug b/services/web/app/views/user/login.pug
+index 9185b0b..4eaa361 100644
+--- a/services/web/app/views/user/login.pug
++++ b/services/web/app/views/user/login.pug
+@@ -13,40 +13,46 @@ block content
+ 							if login_support_title
+ 								h1 !{login_support_title}
+ 							else
+-								h1 #{translate("log_in")}					
+-						form(data-ol-async-form, name="loginForm", action='/login', method="POST")
+-							input(name='_csrf', type='hidden', value=csrfToken)
+-							+formMessages()
+-							+customFormMessage('invalid-password-retry-or-reset', 'danger')
+-								| !{translate('email_or_password_wrong_try_again_or_reset', {}, [{ name: 'a', attrs: { href: '/user/password/reset', 'aria-describedby': 'resetPasswordDescription' } }])}
+-								span.sr-only(id='resetPasswordDescription')
+-									| #{translate('reset_password_link')}
+-							+customValidationMessage('password-compromised')
+-								| !{translate('password_compromised_try_again_or_use_known_device_or_reset', {}, [{name: 'a', attrs: {href: 'https://haveibeenpwned.com/passwords', rel: 'noopener noreferrer', target: '_blank'}}, {name: 'a', attrs: {href: '/user/password/reset', target: '_blank'}}])}.
+-							.form-group
+-								input.form-control(
+-									type='email',
+-									name='email',
+-									required,
+-									placeholder='email@example.com',
+-									autofocus="true"
+-								)
+-							.form-group
+-								input.form-control(
+-									type='password',
+-									name='password',
+-									required,
+-									placeholder='********',
+-								)
+-							.actions
+-								button.btn-primary.btn(
+-									type='submit',
+-									data-ol-disabled-inflight
+-								)
+-									span(data-ol-inflight="idle") #{translate("login")}
+-									span(hidden data-ol-inflight="pending") #{translate("logging_in")}…
+-								a.pull-right(href='/user/password/reset') #{translate("forgot_your_password")}?
+-							if login_support_text
+-								hr
+-								p.text-center !{login_support_text}	
+-	
++								h1 #{translate("log_in")}
++						.card-body.text-center
++							p
++								!= login_info_text
++						hr
++						if local_login_enabled
++							form(data-ol-async-form, name="loginForm", action='/login', method="POST")
++								input(name='_csrf', type='hidden', value=csrfToken)
++								+formMessages()
++								+customFormMessage('invalid-password-retry-or-reset', 'danger')
++									| !{translate('email_or_password_wrong_try_again_or_reset', {}, [{ name: 'a', attrs: { href: '/user/password/reset', 'aria-describedby': 'resetPasswordDescription' } }])}
++									span.sr-only(id='resetPasswordDescription')
++										| #{translate('reset_password_link')}
++								+customValidationMessage('password-compromised')
++									| !{translate('password_compromised_try_again_or_use_known_device_or_reset', {}, [{name: 'a', attrs: {href: 'https://haveibeenpwned.com/passwords', rel: 'noopener noreferrer', target: '_blank'}}, {name: 'a', attrs: {href: '/user/password/reset', target: '_blank'}}])}.
++								.form-group
++									input.form-control(
++										type='email',
++										name='email',
++										required,
++										placeholder='email@example.com',
++										autofocus="true"
++									)
++								.form-group
++									input.form-control(
++										type='password',
++										name='password',
++										required,
++										placeholder='********',
++									)
++								.actions
++									button.btn-primary.btn(
++										type='submit',
++										data-ol-disabled-inflight
++									)
++										span(data-ol-inflight="idle") #{translate("login")}
++										span(hidden data-ol-inflight="pending") #{translate("logging_in")}…
++									a.pull-right(href='/user/password/reset') #{translate("forgot_your_password")}?
++								if login_support_text
++									hr
++									p.text-center !{login_support_text}
++						if oidc_login_enabled
++							a.btn.btn-primary.mt-2(href="/login/oidc", role="button") #{oidc_login_button_text}
+diff --git a/services/web/config/settings.defaults.js b/services/web/config/settings.defaults.js
+index be567bf..b13f54c 100644
+--- a/services/web/config/settings.defaults.js
++++ b/services/web/config/settings.defaults.js
+@@ -113,6 +113,11 @@ const httpPermissionsPolicy = {
+ module.exports = {
+   env: 'server-ce',
+ 
++  ldap: {
++    enable: true,
++    updateUserDetailsOnLogin: true,
++  },
++
+   limits: {
+     httpGlobalAgentMaxSockets: 300,
+     httpsGlobalAgentMaxSockets: 300,
+diff --git a/services/web/package.json b/services/web/package.json
+index b2ba9c2..59d150f 100644
+--- a/services/web/package.json
++++ b/services/web/package.json
+@@ -73,6 +73,7 @@
+     "@contentful/rich-text-html-renderer": "^16.0.2",
+     "@contentful/rich-text-types": "^16.0.2",
+     "@google-cloud/bigquery": "^6.0.1",
++    "@govtechsg/passport-openidconnect": "^1.0.3",
+     "@node-oauth/oauth2-server": "^5.1.0",
+     "@node-saml/passport-saml": "^4.0.4",
+     "@overleaf/access-token-encryptor": "*",
+-- 
+2.43.0
+
