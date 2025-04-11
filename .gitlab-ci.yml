@@ -16,7 +16,9 @@ stages:
     - apk add git
     - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
     - git clone https://github.com/overleaf/overleaf.git -b main --depth 1 upstream
-    - git -C upstream apply *.patch
+    - cd upstream
+    - git apply ../*.patch
+    - cd ..
 
 docker_other:
   extends: .docker_template
