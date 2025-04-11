@@ -1,0 +1,27 @@
+From 716d86492cd56f2e15431209114685060fe41477 Mon Sep 17 00:00:00 2001
+From: Erik Michelson <opensource@erik.michelson.eu>
+Date: Sat, 12 Apr 2025 00:32:38 +0200
+Subject: [PATCH] [clsi] Add configurable shell-escape flag
+
+---
+ services/clsi/app/js/LatexRunner.js | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/services/clsi/app/js/LatexRunner.js b/services/clsi/app/js/LatexRunner.js
+index beefa00..fe51b13 100644
+--- a/services/clsi/app/js/LatexRunner.js
++++ b/services/clsi/app/js/LatexRunner.js
+@@ -164,6 +164,10 @@ function _buildLatexCommand(mainFile, opts = {}) {
+     '-interaction=batchmode'
+   )
+ 
++  if (process.env.OVERLEAF_ENABLE_SHELL_ESCAPE) {
++    command.push('-shell-escape')
++  }
++
+   // Stop on first error option
+   if (opts.stopOnFirstError) {
+     command.push('-halt-on-error')
+-- 
+2.43.0
+

@@ -31,3 +31,4 @@ variables have been added:
 | `OVERLEAF_OIDC_CLIENT_SECRET`     | The client secret for the registration at the OIDC provider                                                                        |
 | `OVERLEAF_OIDC_MATCHING`          | Which identifier to use for lookups in the database, one of `id` or `username` (default: `id`)                                     |
 | `OVERLEAF_OIDC_LOGIN_IN_NAVBAR`   | Whether to show a distinct SSO login button in the navbar (default: `false`)                                                       |
+| `OVERLEAF_ENABLE_SHELL_ESCAPE`    | Whether to add the `-shell-escape` flag to the LaTeX compiler, should only be done with sandboxed compiles                         |
