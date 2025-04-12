@@ -1,11 +1,11 @@
-From a2852cd2db8a786900920bbe742f88fb08349933 Mon Sep 17 00:00:00 2001
+From bc24def57c548e3e4326bf20c4aac1429e1b7bae Mon Sep 17 00:00:00 2001
 From: Erik Michelson <opensource@erik.michelson.eu>
 Date: Fri, 11 Apr 2025 22:38:12 +0200
 Subject: [PATCH] [auth] Add OIDC login
 
 ---
  package-lock.json                             |  20 ++
- .../AuthenticationController.js               | 185 ++++++++++++++----
+ .../AuthenticationController.js               | 196 ++++++++++++++----
  .../User/UserPrimaryEmailCheckHandler.js      |   5 +
  .../app/src/infrastructure/ExpressLocals.js   |  12 ++
  .../web/app/src/infrastructure/Server.mjs     |  20 ++
@@ -14,10 +14,10 @@ Subject: [PATCH] [auth] Add OIDC login
  .../layout/navbar-marketing-bootstrap-5.pug   |  29 ++-
  .../web/app/views/layout/navbar-marketing.pug |  29 ++-
  .../views/layout/navbar-website-redesign.pug  |  29 ++-
- services/web/app/views/user/login.pug         |  80 ++++----
+ services/web/app/views/user/login.pug         |  80 +++----
  services/web/config/settings.defaults.js      |   5 +
  services/web/package.json                     |   1 +
- 13 files changed, 329 insertions(+), 102 deletions(-)
+ 13 files changed, 340 insertions(+), 102 deletions(-)
 
 diff --git a/package-lock.json b/package-lock.json
 index b0fb9ef..3190a4c 100644
@@ -58,7 +58,7 @@ index b0fb9ef..3190a4c 100644
          "@node-saml/passport-saml": "^4.0.4",
          "@overleaf/access-token-encryptor": "*",
 diff --git a/services/web/app/src/Features/Authentication/AuthenticationController.js b/services/web/app/src/Features/Authentication/AuthenticationController.js
-index 7a97d2a..5f662c7 100644
+index 7a97d2a..2cb65b9 100644
 --- a/services/web/app/src/Features/Authentication/AuthenticationController.js
 +++ b/services/web/app/src/Features/Authentication/AuthenticationController.js
 @@ -9,6 +9,8 @@ const querystring = require('querystring')
@@ -70,14 +70,17 @@ index 7a97d2a..5f662c7 100644
  const UserHandler = require('../User/UserHandler')
  const UserSessionsManager = require('../User/UserSessionsManager')
  const Analytics = require('../Analytics/AnalyticsManager')
-@@ -97,50 +99,62 @@ const AuthenticationController = {
+@@ -97,50 +99,70 @@ const AuthenticationController = {
      cb(null, user)
    },
  
-+  createPassportCallback(method) {
++  createPassportCallback(method, req, res, next) {
 +    return async function (err, user, info) {
 +      if (err) {
 +        return next(err)
++      }
++      if (!info) {
++        info = {}
 +      }
 +      if (user) {
 +        // `user` is either a user object or false
@@ -166,11 +169,16 @@ index 7a97d2a..5f662c7 100644
 -          }
 -        }
 -      }
-+      AuthenticationController.createPassportCallback('Password login')
++      AuthenticationController.createPassportCallback(
++        'Password login',
++        req,
++        res,
++        next
++      )
      )(req, res, next)
    },
  
-@@ -601,6 +615,103 @@ const AuthenticationController = {
+@@ -601,6 +623,106 @@ const AuthenticationController = {
        delete req.session.postLoginRedirect
      }
    },
@@ -216,20 +224,22 @@ index 7a97d2a..5f662c7 100644
 +        failureRedirect: '/login',
 +        failureMessage: true,
 +      },
-+      AuthenticationController.createPassportCallback('OIDC login')
++      AuthenticationController.createPassportCallback(
++        'OIDC login',
++        req,
++        res,
++        next
++      )
 +    )(req, res, next)
 +  },
 +
 +  verifyOpenIDConnect(issuer, profile, callback) {
-+    User.findOne(
-+      {
-+        oidcIdentifier:
-+          AuthenticationController.extractOidcIdFromProfile(profile),
-+      },
-+      function (error, user) {
-+        if (error) {
-+          return callback(error)
-+        }
++    User.findOne({
++      oidcIdentifier:
++        AuthenticationController.extractOidcIdFromProfile(profile),
++    })
++      .exec()
++      .then(user => {
 +        if (!user) {
 +          UserCreator.createNewUser(
 +            {
@@ -261,15 +271,16 @@ index 7a97d2a..5f662c7 100644
 +            }
 +            user.emails = [emailData]
 +          }
-+          user.save(function (error) {
-+            if (error) {
-+              return callback(error)
-+            }
++          user.save().then(() => {
 +            return callback(null, user)
++          }).catch(error => {
++            return callback(error)
 +          })
 +        }
-+      }
-+    )
++      })
++      .catch(error => {
++        return callback(error)
++      })
 +  },
  }
  
