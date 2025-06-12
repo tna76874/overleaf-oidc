@@ -1,15 +1,5 @@
-From d09fb7096ae824691e90514b8206718a5d1371ce Mon Sep 17 00:00:00 2001
-From: Erik Michelson <opensource@erik.michelson.eu>
-Date: Sat, 12 Apr 2025 00:32:38 +0200
-Subject: [PATCH] [clsi] Add configurable shell-escape flag
-
----
- services/clsi/app/js/LatexRunner.js       | 4 ++++
- services/clsi/config/settings.defaults.js | 4 ++--
- 2 files changed, 6 insertions(+), 2 deletions(-)
-
 diff --git a/services/clsi/app/js/LatexRunner.js b/services/clsi/app/js/LatexRunner.js
-index beefa00..fe51b13 100644
+index beefa002ab..fe51b13db2 100644
 --- a/services/clsi/app/js/LatexRunner.js
 +++ b/services/clsi/app/js/LatexRunner.js
 @@ -164,6 +164,10 @@ function _buildLatexCommand(mainFile, opts = {}) {
@@ -23,20 +13,3 @@ index beefa00..fe51b13 100644
    // Stop on first error option
    if (opts.stopOnFirstError) {
      command.push('-halt-on-error')
-diff --git a/services/clsi/config/settings.defaults.js b/services/clsi/config/settings.defaults.js
-index 0c29eaa..a9fc425 100644
---- a/services/clsi/config/settings.defaults.js
-+++ b/services/clsi/config/settings.defaults.js
-@@ -177,7 +177,7 @@ if (process.env.DOCKER_RUNNER) {
-   module.exports.path.synctexBaseDir = () => '/compile'
- 
-   module.exports.path.sandboxedCompilesHostDirCompiles =
--    process.env.COMPILES_HOST_DIR
-+    process.env.COMPILES_HOST_DIR || process.env.SANDBOXED_COMPILES_HOST_DIR_COMPILES
-   module.exports.path.sandboxedCompilesHostDirOutput =
--    process.env.OUTPUT_HOST_DIR
-+    process.env.OUTPUT_HOST_DIR || process.env.SANDBOXED_COMPILES_HOST_DIR_OUTPUT
- }
--- 
-2.43.0
-
