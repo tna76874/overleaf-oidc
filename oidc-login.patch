@@ -1,8 +1,28 @@
+From dd5ea8517345dda4ab4281efad6e61d19d90d23a Mon Sep 17 00:00:00 2001
+From: Erik Michelson <opensource@erik.michelson.eu>
+Date: Fri, 11 Apr 2025 22:38:12 +0200
+Subject: [PATCH] [auth] Add OIDC login
+
+---
+ package-lock.json                             |  20 ++
+ .../AuthenticationController.js               | 196 ++++++++++++++----
+ .../User/UserPrimaryEmailCheckHandler.js      |   5 +
+ .../app/src/infrastructure/ExpressLocals.js   |  12 ++
+ .../web/app/src/infrastructure/Server.mjs     |  20 ++
+ services/web/app/src/models/User.js           |   1 +
+ services/web/app/src/router.mjs               |  15 +-
+ .../web/app/views/layout/navbar-marketing.pug |  29 ++-
+ .../views/layout/navbar-website-redesign.pug  |  29 ++-
+ services/web/app/views/user/login.pug         |  72 ++++---
+ services/web/config/settings.defaults.js      |   5 +
+ services/web/package.json                     |   1 +
+ 12 files changed, 316 insertions(+), 89 deletions(-)
+
 diff --git a/package-lock.json b/package-lock.json
-index ce75c110c4..d153fc84de 100644
+index 9b21f9326d..b5522d55c1 100644
 --- a/package-lock.json
 +++ b/package-lock.json
-@@ -5942,6 +5942,25 @@
+@@ -5979,6 +5979,25 @@
        "resolved": "https://registry.npmjs.org/yallist/-/yallist-4.0.0.tgz",
        "integrity": "sha512-3wdGidZyq5PB084XLES5TpOSRA3wjXAlIWMhum2kRcv/41Sn2emQ0dycQW4uZXLejwKvg6EsvbdlVL+FYEct7A=="
      },
@@ -28,16 +48,16 @@ index ce75c110c4..d153fc84de 100644
      "node_modules/@grpc/grpc-js": {
        "version": "1.13.4",
        "resolved": "https://registry.npmjs.org/@grpc/grpc-js/-/grpc-js-1.13.4.tgz",
-@@ -45137,6 +45156,7 @@
+@@ -44492,6 +44511,7 @@
          "@contentful/rich-text-html-renderer": "^16.0.2",
          "@contentful/rich-text-types": "^16.0.2",
          "@google-cloud/bigquery": "^6.0.1",
 +        "@govtechsg/passport-openidconnect": "^1.0.3",
          "@node-oauth/oauth2-server": "^5.1.0",
-         "@node-saml/passport-saml": "^4.0.4",
+         "@node-saml/passport-saml": "^5.1.0",
          "@overleaf/access-token-encryptor": "*",
 diff --git a/services/web/app/src/Features/Authentication/AuthenticationController.js b/services/web/app/src/Features/Authentication/AuthenticationController.js
-index 7a97d2ac9c..2cb65b912e 100644
+index 99c418df1b..ad56d40b78 100644
 --- a/services/web/app/src/Features/Authentication/AuthenticationController.js
 +++ b/services/web/app/src/Features/Authentication/AuthenticationController.js
 @@ -9,6 +9,8 @@ const querystring = require('querystring')
@@ -49,7 +69,7 @@ index 7a97d2ac9c..2cb65b912e 100644
  const UserHandler = require('../User/UserHandler')
  const UserSessionsManager = require('../User/UserSessionsManager')
  const Analytics = require('../Analytics/AnalyticsManager')
-@@ -97,50 +99,70 @@ const AuthenticationController = {
+@@ -112,50 +114,70 @@ const AuthenticationController = {
      cb(null, user)
    },
  
@@ -157,7 +177,7 @@ index 7a97d2ac9c..2cb65b912e 100644
      )(req, res, next)
    },
  
-@@ -601,6 +623,106 @@ const AuthenticationController = {
+@@ -616,6 +638,106 @@ const AuthenticationController = {
        delete req.session.postLoginRedirect
      }
    },
@@ -281,10 +301,10 @@ index be1d045d01..eb41c10b4a 100644
      if (!date) {
        return true
 diff --git a/services/web/app/src/infrastructure/ExpressLocals.js b/services/web/app/src/infrastructure/ExpressLocals.js
-index eae1b48219..7c224941f9 100644
+index 0047cd3d0d..91078a07c3 100644
 --- a/services/web/app/src/infrastructure/ExpressLocals.js
 +++ b/services/web/app/src/infrastructure/ExpressLocals.js
-@@ -227,6 +227,18 @@ module.exports = function (webRouter, privateApiRouter, publicApiRouter) {
+@@ -199,6 +199,18 @@ module.exports = function (webRouter, privateApiRouter, publicApiRouter) {
        return staticFilesBase + path
      }
  
@@ -304,7 +324,7 @@ index eae1b48219..7c224941f9 100644
    })
  
 diff --git a/services/web/app/src/infrastructure/Server.mjs b/services/web/app/src/infrastructure/Server.mjs
-index 9e548bdc9e..9a8c0acef8 100644
+index 6aba16e682..2abc63e19e 100644
 --- a/services/web/app/src/infrastructure/Server.mjs
 +++ b/services/web/app/src/infrastructure/Server.mjs
 @@ -20,6 +20,7 @@ import cookieParser from 'cookie-parser'
@@ -349,10 +369,10 @@ index 9e548bdc9e..9a8c0acef8 100644
  passport.deserializeUser(AuthenticationController.deserializeUser)
  
 diff --git a/services/web/app/src/models/User.js b/services/web/app/src/models/User.js
-index c1701023c4..02c4205f89 100644
+index bdf8a4c4ed..79fa0632a9 100644
 --- a/services/web/app/src/models/User.js
 +++ b/services/web/app/src/models/User.js
-@@ -214,6 +214,7 @@ const UserSchema = new Schema(
+@@ -215,6 +215,7 @@ const UserSchema = new Schema(
      awareOfV2: { type: Boolean, default: false },
      samlIdentifiers: { type: Array, default: [] },
      thirdPartyIdentifiers: { type: Array, default: [] },
@@ -361,10 +381,10 @@ index c1701023c4..02c4205f89 100644
      twoFactorAuthentication: {
        createdAt: { type: Date },
 diff --git a/services/web/app/src/router.mjs b/services/web/app/src/router.mjs
-index 7851a4a66f..c4052a758d 100644
+index 54cc0f81e1..085c4be282 100644
 --- a/services/web/app/src/router.mjs
 +++ b/services/web/app/src/router.mjs
-@@ -220,6 +220,15 @@ async function initialize(webRouter, privateApiRouter, publicApiRouter) {
+@@ -222,6 +222,15 @@ async function initialize(webRouter, privateApiRouter, publicApiRouter) {
    webRouter.get('/login', UserPagesController.loginPage)
    AuthenticationController.addEndpointToLoginWhitelist('/login')
  
@@ -380,7 +400,7 @@ index 7851a4a66f..c4052a758d 100644
    webRouter.post(
      '/login',
      RateLimiterMiddleware.rateLimit(overleafLoginRateLimiter), // rate limit IP (20 / 60s)
-@@ -268,8 +277,12 @@ async function initialize(webRouter, privateApiRouter, publicApiRouter) {
+@@ -270,8 +279,12 @@ async function initialize(webRouter, privateApiRouter, publicApiRouter) {
  
    if (Features.hasFeature('registration-page')) {
      webRouter.get('/register', UserPagesController.registerPage)
@@ -394,143 +414,98 @@ index 7851a4a66f..c4052a758d 100644
  
    EditorRouter.apply(webRouter, privateApiRouter)
    CollaboratorsRouter.apply(webRouter, privateApiRouter)
-diff --git a/services/web/app/views/layout/navbar-marketing-bootstrap-5.pug b/services/web/app/views/layout/navbar-marketing-bootstrap-5.pug
-index c581ab29ce..cea2724dec 100644
---- a/services/web/app/views/layout/navbar-marketing-bootstrap-5.pug
-+++ b/services/web/app/views/layout/navbar-marketing-bootstrap-5.pug
-@@ -145,15 +145,26 @@ nav.navbar.navbar-default.navbar-main.navbar-expand-lg(class={
+diff --git a/services/web/app/views/layout/navbar-marketing.pug b/services/web/app/views/layout/navbar-marketing.pug
+index 63781f9260..874d4f4cf2 100644
+--- a/services/web/app/views/layout/navbar-marketing.pug
++++ b/services/web/app/views/layout/navbar-marketing.pug
+@@ -163,15 +163,26 @@ nav.navbar.navbar-default.navbar-main.navbar-expand-lg(
  								) #{translate('sign_up')}
  
  						// login link
 -						+nav-item
 -							+nav-link(
--								href="/login"
--								event-tracking="menu-click"
--								event-tracking-action="clicked"
--								event-tracking-trigger="click"
--								event-tracking-mb="true"
--								event-segmentation={ page: currentUrl, item: 'login', location: 'top-menu' }
+-								href='/login'
+-								event-tracking='menu-click'
+-								event-tracking-action='clicked'
+-								event-tracking-trigger='click'
+-								event-tracking-mb='true'
+-								event-segmentation={page: currentUrl, item: 'login', location: 'top-menu'}
 -							) #{translate('log_in')}
 +						if local_login_enabled
 +							+nav-item
 +								+nav-link(
-+									href="/login"
-+									event-tracking="menu-click"
-+									event-tracking-action="clicked"
-+									event-tracking-trigger="click"
-+									event-tracking-mb="true"
-+									event-segmentation={ page: currentUrl, item: 'login', location: 'top-menu' }
++									href='/login'
++									event-tracking='menu-click'
++									event-tracking-action='clicked'
++									event-tracking-trigger='click'
++									event-tracking-mb='true'
++									event-segmentation={page: currentUrl, item: 'login', location: 'top-menu'}
 +								) #{translate('log_in')}
 +						if oidc_login_enabled && (oidc_login_in_navbar || !local_login_enabled)
 +							+nav-item
 +								+nav-link(
-+									href="/login/oidc"
-+									event-tracking="menu-click"
-+									event-tracking-action="clicked"
-+									event-tracking-trigger="click"
-+									event-tracking-mb="true"
-+									event-segmentation={ page: currentUrl, item: 'login', location: 'top-menu' }
-+								) #{oidc_login_button_text}
- 
- 					// projects link and account menu
- 					if getSessionUser()
-diff --git a/services/web/app/views/layout/navbar-marketing.pug b/services/web/app/views/layout/navbar-marketing.pug
-index c5e9f2e0bf..01f700fcde 100644
---- a/services/web/app/views/layout/navbar-marketing.pug
-+++ b/services/web/app/views/layout/navbar-marketing.pug
-@@ -153,15 +153,26 @@ nav.navbar.navbar-default.navbar-main(class={
- 								) #{translate('sign_up')}
- 
- 						// login link
--						li
--							a(
--								href="/login"
--								event-tracking="menu-click"
--								event-tracking-action="clicked"
--								event-tracking-trigger="click"
--								event-tracking-mb="true"
--								event-segmentation={ page: currentUrl, item: 'login', location: 'top-menu' }
--							) #{translate('log_in')}
-+						if local_login_enabled
-+							li
-+								a(
-+									href="/login"
-+									event-tracking="menu-click"
-+									event-tracking-action="clicked"
-+									event-tracking-trigger="click"
-+									event-tracking-mb="true"
-+									event-segmentation={ page: currentUrl, item: 'login', location: 'top-menu' }
-+								) #{translate('log_in')}
-+						if oidc_login_enabled && (oidc_login_in_navbar || !local_login_enabled)
-+							li
-+								a(
-+									href="/login/oidc"
-+									event-tracking="menu-click"
-+									event-tracking-action="clicked"
-+									event-tracking-trigger="click"
-+									event-tracking-mb="true"
-+									event-segmentation={ page: currentUrl, item: 'login', location: 'top-menu' }
++									href='/login/oidc'
++									event-tracking='menu-click'
++									event-tracking-action='clicked'
++									event-tracking-trigger='click'
++									event-tracking-mb='true'
++									event-segmentation={page: currentUrl, item: 'login', location: 'top-menu'}
 +								) #{oidc_login_button_text}
  
  					// projects link and account menu
  					if getSessionUser()
 diff --git a/services/web/app/views/layout/navbar-website-redesign.pug b/services/web/app/views/layout/navbar-website-redesign.pug
-index 8ea71861c0..872aaf4604 100644
+index 13cf8c2a71..8942faedde 100644
 --- a/services/web/app/views/layout/navbar-website-redesign.pug
 +++ b/services/web/app/views/layout/navbar-website-redesign.pug
-@@ -151,15 +151,26 @@ nav.navbar.navbar-default.navbar-main.website-redesign-navbar
+@@ -169,15 +169,26 @@ nav.navbar.navbar-default.navbar-main.website-redesign-navbar(
  								) #{translate('sign_up')}
  
  						// login link
 -						li.secondary
 -							a(
--								href="/login"
--								event-tracking="menu-click"
--								event-tracking-action="clicked"
--								event-tracking-trigger="click"
--								event-tracking-mb="true"
--								event-segmentation={ page: currentUrl, item: 'login', location: 'top-menu' }
+-								href='/login'
+-								event-tracking='menu-click'
+-								event-tracking-action='clicked'
+-								event-tracking-trigger='click'
+-								event-tracking-mb='true'
+-								event-segmentation={page: currentUrl, item: 'login', location: 'top-menu'}
 -							) #{translate('log_in')}
 +						if local_login_enabled
 +							li.secondary
 +								a(
-+									href="/login"
-+									event-tracking="menu-click"
-+									event-tracking-action="clicked"
-+									event-tracking-trigger="click"
-+									event-tracking-mb="true"
-+									event-segmentation={ page: currentUrl, item: 'login', location: 'top-menu' }
++									href='/login'
++									event-tracking='menu-click'
++									event-tracking-action='clicked'
++									event-tracking-trigger='click'
++									event-tracking-mb='true'
++									event-segmentation={page: currentUrl, item: 'login', location: 'top-menu'}
 +								) #{translate('log_in')}
 +						if oidc_login_enabled && (oidc_login_in_navbar || !local_login_enabled)
 +							li.secondary
 +								a(
-+									href="/login/oidc"
-+									event-tracking="menu-click"
-+									event-tracking-action="clicked"
-+									event-tracking-trigger="click"
-+									event-tracking-mb="true"
-+									event-segmentation={ page: currentUrl, item: 'login', location: 'top-menu' }
++									href='/login/oidc'
++									event-tracking='menu-click'
++									event-tracking-action='clicked'
++									event-tracking-trigger='click'
++									event-tracking-mb='true'
++									event-segmentation={page: currentUrl, item: 'login', location: 'top-menu'}
 +								) #{oidc_login_button_text}
  
  					// projects link and account menu
  					if getSessionUser()
 diff --git a/services/web/app/views/user/login.pug b/services/web/app/views/user/login.pug
-index 1ad77cb8b4..a34dfd1f06 100644
+index 03112a0e16..a2694bf254 100644
 --- a/services/web/app/views/user/login.pug
 +++ b/services/web/app/views/user/login.pug
-@@ -6,45 +6,50 @@ block content
- 			.row
- 				.col-lg-6.offset-lg-3.col-xl-4.offset-xl-4
- 					.card
--						.card-body
--							.page-header
--								if login_support_title
--									h1 !{login_support_title}
--								else
--									h1 #{translate("log_in")}					
--							form(data-ol-async-form, name="loginForm", action='/login', method="POST")
--								input(name='_csrf', type='hidden', value=csrfToken)
--								+formMessagesNewStyle()
+@@ -11,36 +11,42 @@ block content
+ 								if login_support_title
+ 									h1 !{login_support_title}
+ 								else
+-									h1 #{translate("log_in")} 
+-							form(name='loginForm' data-ol-async-form action='/login' method='POST')
+-								input(name='_csrf' type='hidden' value=csrfToken)
+-								+formMessagesNewStyle
 -								+customFormMessageNewStyle('invalid-password-retry-or-reset', 'danger')
 -									| !{translate('email_or_password_wrong_try_again_or_reset', {}, [{ name: 'a', attrs: { href: '/user/password/reset', 'aria-describedby': 'resetPasswordDescription' } }])}
 -									span.visually-hidden(id='resetPasswordDescription')
@@ -539,42 +514,33 @@ index 1ad77cb8b4..a34dfd1f06 100644
 -									| !{translate('password_compromised_try_again_or_use_known_device_or_reset', {}, [{name: 'a', attrs: {href: 'https://haveibeenpwned.com/passwords', rel: 'noopener noreferrer', target: '_blank'}}, {name: 'a', attrs: {href: '/user/password/reset', target: '_blank'}}])}.
 -								.form-group
 -									input.form-control(
--										type='email',
--										name='email',
--										required,
--										placeholder='email@example.com',
--										autofocus="true"
+-										name='email'
+-										type='email'
+-										required
+-										placeholder='email@example.com'
+-										autofocus='true'
 -									)
 -								.form-group
 -									input.form-control(
--										type='password',
--										name='password',
--										required,
--										placeholder='********',
+-										name='password'
+-										type='password'
+-										required
+-										placeholder='********'
 -									)
 -								.actions
--									button.btn-primary.btn(
--										type='submit',
--										data-ol-disabled-inflight
--									)
--										span(data-ol-inflight="idle") #{translate("login")}
--										span(hidden data-ol-inflight="pending") #{translate("logging_in")}…
+-									button.btn-primary.btn(type='submit' data-ol-disabled-inflight)
+-										span(data-ol-inflight='idle') #{translate("login")}
+-										span(hidden data-ol-inflight='pending') #{translate("logging_in")}…
 -									a.float-end(href='/user/password/reset') #{translate("forgot_your_password")}?
 -								if login_support_text
 -									hr
--									p.text-center !{login_support_text}	
--		
-+						.page-header
-+							if login_support_title
-+								h1 !{login_support_title}
-+							else
-+								h1 #{translate("log_in")}
-+						.card-body.text-center
+-									p.text-center !{login_support_text}
++									h1 #{translate("log_in")}
 +							p
 +								!= login_info_text
 +							hr
 +							if local_login_enabled
-+								form(data-ol-async-form, name="loginForm", action='/login', method="POST")
++								form(name='loginForm' data-ol-async-form action='/login' method='POST')
 +									input(name='_csrf', type='hidden', value=csrfToken)
 +									+formMessagesNewStyle()
 +									+customFormMessageNewStyle('invalid-password-retry-or-reset', 'danger')
@@ -585,34 +551,31 @@ index 1ad77cb8b4..a34dfd1f06 100644
 +										| !{translate('password_compromised_try_again_or_use_known_device_or_reset', {}, [{name: 'a', attrs: {href: 'https://haveibeenpwned.com/passwords', rel: 'noopener noreferrer', target: '_blank'}}, {name: 'a', attrs: {href: '/user/password/reset', target: '_blank'}}])}.
 +									.form-group
 +										input.form-control(
-+											type='email',
-+											name='email',
-+											required,
-+											placeholder='email@example.com',
-+											autofocus="true"
++											name='email'
++											type='email'
++											required
++											placeholder='email@example.com'
++											autofocus='true'
 +										)
 +									.form-group
 +										input.form-control(
-+											type='password',
-+											name='password',
-+											required,
-+											placeholder='********',
++											name='password'
++											type='password'
++											required
++											placeholder='********'
 +										)
 +									.actions
-+										button.btn-primary.btn(
-+											type='submit',
-+											data-ol-disabled-inflight
-+										)
-+											span(data-ol-inflight="idle") #{translate("login")}
-+											span(hidden data-ol-inflight="pending") #{translate("logging_in")}…
++										button.btn-primary.btn(type='submit' data-ol-disabled-inflight)
++											span(data-ol-inflight='idle') #{translate("login")}
++											span(hidden data-ol-inflight='pending') #{translate("logging_in")}…
 +										a.float-end(href='/user/password/reset') #{translate("forgot_your_password")}?
 +									if login_support_text
 +										hr
 +										p.text-center !{login_support_text}
 +							if oidc_login_enabled
-+								a.btn.btn-primary.mt-2(href="/login/oidc", role="button") #{oidc_login_button_text}
++								a.btn.btn-primary.mt-2(href='/login/oidc' role='button') #{oidc_login_button_text}
 diff --git a/services/web/config/settings.defaults.js b/services/web/config/settings.defaults.js
-index 43544814fd..f9c093d142 100644
+index 3906ead8a0..9fc0fd31c7 100644
 --- a/services/web/config/settings.defaults.js
 +++ b/services/web/config/settings.defaults.js
 @@ -113,6 +113,11 @@ const httpPermissionsPolicy = {
@@ -628,14 +591,17 @@ index 43544814fd..f9c093d142 100644
      httpGlobalAgentMaxSockets: 300,
      httpsGlobalAgentMaxSockets: 300,
 diff --git a/services/web/package.json b/services/web/package.json
-index 59825e0e68..d3fd771d77 100644
+index 45a564781d..4d1fc86d93 100644
 --- a/services/web/package.json
 +++ b/services/web/package.json
-@@ -77,6 +77,7 @@
+@@ -79,6 +79,7 @@
      "@contentful/rich-text-html-renderer": "^16.0.2",
      "@contentful/rich-text-types": "^16.0.2",
      "@google-cloud/bigquery": "^6.0.1",
 +    "@govtechsg/passport-openidconnect": "^1.0.3",
      "@node-oauth/oauth2-server": "^5.1.0",
-     "@node-saml/passport-saml": "^4.0.4",
+     "@node-saml/passport-saml": "^5.1.0",
      "@overleaf/access-token-encryptor": "*",
+-- 
+2.43.0
+

@@ -1,3 +1,12 @@
+From 9af883c512090b2aaa2240ddf84b3942111559ec Mon Sep 17 00:00:00 2001
+From: Erik Michelson <opensource@erik.michelson.eu>
+Date: Sat, 12 Apr 2025 00:32:38 +0200
+Subject: [PATCH] [clsi] Add configurable shell-escape flag
+
+---
+ services/clsi/app/js/LatexRunner.js | 4 ++++
+ 1 file changed, 4 insertions(+)
+
 diff --git a/services/clsi/app/js/LatexRunner.js b/services/clsi/app/js/LatexRunner.js
 index beefa002ab..fe51b13db2 100644
 --- a/services/clsi/app/js/LatexRunner.js
@@ -13,3 +22,6 @@ index beefa002ab..fe51b13db2 100644
    // Stop on first error option
    if (opts.stopOnFirstError) {
      command.push('-halt-on-error')
+-- 
+2.43.0
+
