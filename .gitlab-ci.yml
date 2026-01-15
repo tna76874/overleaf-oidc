@@ -9,6 +9,11 @@ stages:
   variables:
     DOCKER_HOST: tcp://docker:2375
     DOCKER_TLS_CERTDIR: ""
+    # NOTE: This SHA needs to be updated manually to build a new version of Overleaf
+    # Since Overleaf does not tag releases in their source, one needs to look at the
+    # release notes (https://docs.overleaf.com/on-premises/release-notes/release-notes-5.x.x),
+    # and get the latest commit for the release date.
+    UPSTREAM_COMMIT_SHA: "4271744bfd086fc0daa55213a86b394bac1298c8"
   services:
     - name: docker:dind
       alias: docker
@@ -17,7 +22,7 @@ stages:
   before_script:
     - apk add git
     - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
-    - git clone https://github.com/overleaf/overleaf.git -b main --depth 1 upstream
+    - git clone https://github.com/overleaf/overleaf.git -b "${UPSTREAM_COMMIT_SHA}" --depth 1 upstream
     - cd upstream
     - git apply ../*.patch
     - cd ..
@@ -28,23 +33,23 @@ docker_other:
     - >-
       docker build
       --cache-from ${CI_REGISTRY_IMAGE}/base:main
-      --cache-from ${CI_REGISTRY_IMAGE}/base:${CI_COMMIT_REF_SLUG}
+      --cache-from ${CI_REGISTRY_IMAGE}/base:${CI_COMMIT_REF_NAME}
       --build-arg BUILDKIT_INLINE_CACHE=1
-      -t "${CI_REGISTRY_IMAGE}/base:${CI_COMMIT_REF_SLUG}"
+      -t "${CI_REGISTRY_IMAGE}/base:${CI_COMMIT_REF_NAME}"
       -f ${CI_PROJECT_DIR}/upstream/server-ce/Dockerfile-base
       ${CI_PROJECT_DIR}/upstream
-    - docker push ${CI_REGISTRY_IMAGE}/base:${CI_COMMIT_REF_SLUG}
+    - docker push ${CI_REGISTRY_IMAGE}/base:${CI_COMMIT_REF_NAME}
     - >-
       docker build
       --cache-from ${CI_REGISTRY_IMAGE}:main
-      --cache-from ${CI_REGISTRY_IMAGE}:${CI_COMMIT_REF_SLUG}
+      --cache-from ${CI_REGISTRY_IMAGE}:${CI_COMMIT_REF_NAME}
       --build-arg BUILDKIT_INLINE_CACHE=1
-      --build-arg OVERLEAF_BASE_TAG=${CI_REGISTRY_IMAGE}/base:${CI_COMMIT_REF_SLUG}
+      --build-arg OVERLEAF_BASE_TAG=${CI_REGISTRY_IMAGE}/base:${CI_COMMIT_REF_NAME}
       --build-arg MONOREPO_REVISION=${CI_COMMIT_SHA}
-      -t "${CI_REGISTRY_IMAGE}:${CI_COMMIT_REF_SLUG}"
+      -t "${CI_REGISTRY_IMAGE}:${CI_COMMIT_REF_NAME}"
       -f ${CI_PROJECT_DIR}/upstream/server-ce/Dockerfile
       ${CI_PROJECT_DIR}/upstream
-    - docker push ${CI_REGISTRY_IMAGE}:${CI_COMMIT_REF_SLUG}
+    - docker push ${CI_REGISTRY_IMAGE}:${CI_COMMIT_REF_NAME}
   rules:
     - if: $CI_COMMIT_BRANCH != "main"
 
@@ -71,7 +76,6 @@ docker_main:
       -t "${CI_REGISTRY_IMAGE}:latest"
       -f ${CI_PROJECT_DIR}/upstream/server-ce/Dockerfile
       ${CI_PROJECT_DIR}/upstream
-    - docker push ${CI_REGISTRY_IMAGE}:main
     - docker push ${CI_REGISTRY_IMAGE}:latest
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
