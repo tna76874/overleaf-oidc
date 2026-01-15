@@ -1,4 +1,4 @@
-From 6ca5debbe14fcd16ffe3133b4dccbcc31b13de6c Mon Sep 17 00:00:00 2001
+From d4c6842edf073e72a47f95ea02e9990bd01a2870 Mon Sep 17 00:00:00 2001
 From: Erik Michelson <opensource@erik.michelson.eu>
 Date: Fri, 11 Apr 2025 22:38:12 +0200
 Subject: [PATCH] [auth] Add OIDC login
@@ -9,7 +9,7 @@ Subject: [PATCH] [auth] Add OIDC login
  .../User/UserPrimaryEmailCheckHandler.mjs     |   5 +
  .../app/src/infrastructure/ExpressLocals.mjs  |  12 ++
  .../web/app/src/infrastructure/Server.mjs     |  20 ++
- services/web/app/src/models/User.js           |   1 +
+ services/web/app/src/models/User.mjs          |   1 +
  services/web/app/src/router.mjs               |  15 +-
  .../web/app/views/layout/navbar-marketing.pug |  29 ++-
  services/web/app/views/user/login.pug         |  76 +++----
@@ -18,10 +18,10 @@ Subject: [PATCH] [auth] Add OIDC login
  11 files changed, 298 insertions(+), 82 deletions(-)
 
 diff --git a/package-lock.json b/package-lock.json
-index c3207932f9..d194f8e5b1 100644
+index a2669456f4..e973b65cf9 100644
 --- a/package-lock.json
 +++ b/package-lock.json
-@@ -12205,6 +12205,25 @@
+@@ -13081,6 +13081,25 @@
          "node": ">=10"
        }
      },
@@ -47,7 +47,7 @@ index c3207932f9..d194f8e5b1 100644
      "node_modules/@grpc/grpc-js": {
        "version": "1.13.4",
        "resolved": "https://registry.npmjs.org/@grpc/grpc-js/-/grpc-js-1.13.4.tgz",
-@@ -53158,6 +53177,7 @@
+@@ -59105,6 +59124,7 @@
          "@contentful/rich-text-types": "^16.0.2",
          "@google-cloud/bigquery": "^6.0.1",
          "@google-cloud/storage": "^6.10.1",
@@ -56,16 +56,16 @@ index c3207932f9..d194f8e5b1 100644
          "@node-saml/passport-saml": "^5.1.0",
          "@overleaf/access-token-encryptor": "*",
 diff --git a/services/web/app/src/Features/Authentication/AuthenticationController.mjs b/services/web/app/src/Features/Authentication/AuthenticationController.mjs
-index 586262d311..4bc280a548 100644
+index 73af8d5058..3e80fd009c 100644
 --- a/services/web/app/src/Features/Authentication/AuthenticationController.mjs
 +++ b/services/web/app/src/Features/Authentication/AuthenticationController.mjs
-@@ -2,6 +2,8 @@ import AuthenticationManager from './AuthenticationManager.js'
- import SessionManager from './SessionManager.js'
+@@ -2,6 +2,8 @@ import AuthenticationManager from './AuthenticationManager.mjs'
+ import SessionManager from './SessionManager.mjs'
  import OError from '@overleaf/o-error'
- import LoginRateLimiter from '../Security/LoginRateLimiter.js'
-+import { User } from '../../models/User.js'
+ import LoginRateLimiter from '../Security/LoginRateLimiter.mjs'
++import { User } from '../../models/User.mjs'
 +import UserCreator from '../User/UserCreator.mjs'
- import UserUpdater from '../User/UserUpdater.js'
+ import UserUpdater from '../User/UserUpdater.mjs'
  import Metrics from '@overleaf/metrics'
  import logger from '@overleaf/logger'
 @@ -112,50 +114,70 @@ const AuthenticationController = {
@@ -300,10 +300,10 @@ index d6ef203a6f..848a37b601 100644
      if (!date) {
        return true
 diff --git a/services/web/app/src/infrastructure/ExpressLocals.mjs b/services/web/app/src/infrastructure/ExpressLocals.mjs
-index b601a6fc20..dd9fcfbaa5 100644
+index 8c9adbad27..8ec8cc16e8 100644
 --- a/services/web/app/src/infrastructure/ExpressLocals.mjs
 +++ b/services/web/app/src/infrastructure/ExpressLocals.mjs
-@@ -205,6 +205,18 @@ export default async function (webRouter, privateApiRouter, publicApiRouter) {
+@@ -186,6 +186,18 @@ export default async function (webRouter, privateApiRouter, publicApiRouter) {
        return staticFilesBase + path
      }
  
@@ -323,10 +323,10 @@ index b601a6fc20..dd9fcfbaa5 100644
    })
  
 diff --git a/services/web/app/src/infrastructure/Server.mjs b/services/web/app/src/infrastructure/Server.mjs
-index 4e13a8e143..43db381b9a 100644
+index 2da657f4a3..6cf109c215 100644
 --- a/services/web/app/src/infrastructure/Server.mjs
 +++ b/services/web/app/src/infrastructure/Server.mjs
-@@ -20,6 +20,7 @@ import cookieParser from 'cookie-parser'
+@@ -19,6 +19,7 @@ import cookieParser from 'cookie-parser'
  import bearerTokenMiddleware from 'express-bearer-token'
  import passport from 'passport'
  import { Strategy as LocalStrategy } from 'passport-local'
@@ -367,11 +367,11 @@ index 4e13a8e143..43db381b9a 100644
  passport.serializeUser(AuthenticationController.serializeUser)
  passport.deserializeUser(AuthenticationController.deserializeUser)
  
-diff --git a/services/web/app/src/models/User.js b/services/web/app/src/models/User.js
-index bdf8a4c4ed..79fa0632a9 100644
---- a/services/web/app/src/models/User.js
-+++ b/services/web/app/src/models/User.js
-@@ -215,6 +215,7 @@ const UserSchema = new Schema(
+diff --git a/services/web/app/src/models/User.mjs b/services/web/app/src/models/User.mjs
+index e95cdef18f..d862a6cd4e 100644
+--- a/services/web/app/src/models/User.mjs
++++ b/services/web/app/src/models/User.mjs
+@@ -224,6 +224,7 @@ export const UserSchema = new Schema(
      awareOfV2: { type: Boolean, default: false },
      samlIdentifiers: { type: Array, default: [] },
      thirdPartyIdentifiers: { type: Array, default: [] },
@@ -380,7 +380,7 @@ index bdf8a4c4ed..79fa0632a9 100644
      twoFactorAuthentication: {
        createdAt: { type: Date },
 diff --git a/services/web/app/src/router.mjs b/services/web/app/src/router.mjs
-index 27c25f3e65..7b509d7956 100644
+index f1c36d2f4c..f7ccba5ad2 100644
 --- a/services/web/app/src/router.mjs
 +++ b/services/web/app/src/router.mjs
 @@ -216,6 +216,15 @@ async function initialize(webRouter, privateApiRouter, publicApiRouter) {
@@ -538,7 +538,7 @@ index 621d5f7020..c5ff25fc04 100644
 +							if oidc_login_enabled
 +								a.btn.btn-primary.mt-2(href='/login/oidc' role='button') #{oidc_login_button_text}
 diff --git a/services/web/config/settings.defaults.js b/services/web/config/settings.defaults.js
-index 93290465f5..26969c88b6 100644
+index 797e7cc4eb..7c02bb01d9 100644
 --- a/services/web/config/settings.defaults.js
 +++ b/services/web/config/settings.defaults.js
 @@ -113,6 +113,11 @@ const httpPermissionsPolicy = {
@@ -554,10 +554,10 @@ index 93290465f5..26969c88b6 100644
      httpGlobalAgentMaxSockets: 300,
      httpsGlobalAgentMaxSockets: 300,
 diff --git a/services/web/package.json b/services/web/package.json
-index cdd6bca6e4..89f14b0502 100644
+index 73fe6a32c0..7d50c69970 100644
 --- a/services/web/package.json
 +++ b/services/web/package.json
-@@ -84,6 +84,7 @@
+@@ -87,6 +87,7 @@
      "@contentful/rich-text-types": "^16.0.2",
      "@google-cloud/bigquery": "^6.0.1",
      "@google-cloud/storage": "^6.10.1",
@@ -566,5 +566,5 @@ index cdd6bca6e4..89f14b0502 100644
      "@node-saml/passport-saml": "^5.1.0",
      "@overleaf/access-token-encryptor": "*",
 -- 
-2.43.0
+2.48.1
 
