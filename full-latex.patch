@@ -1,0 +1,19 @@
+diff --git a/server-ce/Dockerfile b/server-ce/Dockerfile
+index b7ed9cc..d1d0a28 100644
+--- a/server-ce/Dockerfile
++++ b/server-ce/Dockerfile
+@@ -113,6 +113,14 @@ ENV NODE_ENV="production"
+ ENV LOG_LEVEL="info"
+ 
+ 
++############## UPDATE LATEX
++RUN curl -L https://mirror.ctan.org/systems/texlive/tlnet/update-tlmgr-latest.sh -o update-tlmgr-latest.sh
++RUN sh update-tlmgr-latest.sh && \
++    rm update-tlmgr-latest.sh
++RUN tlmgr update --self --all
++RUN tlmgr install scheme-full
++
++
+ EXPOSE 80
+ 
+ ENTRYPOINT ["/sbin/my_init"]
