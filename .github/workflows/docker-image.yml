@@ -6,10 +6,14 @@ on:
       - master
       - main
       - stable
+    paths-ignore:
+      - 'README.md'
   pull_request:
     branches:
       - master
       - main
+    paths-ignore:
+      - 'README.md'
 jobs:
   build-image:
     runs-on: ubuntu-latest

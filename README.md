@@ -1,5 +1,7 @@
 # Overleaf with OIDC support
 
+Source: [https://gitlab.informatik.uni-bremen.de/stugen-admins/forks/overleaf-oidc.git](https://gitlab.informatik.uni-bremen.de/stugen-admins/forks/overleaf-oidc.git)
+
 This repository contains patches to run Overleaf CE with support for
 OpenID Connect (OIDC) as a login method.
 
